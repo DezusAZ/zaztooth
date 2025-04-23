@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ubertooth BLE Scanner</title>
+    <style>
+        body {
+            background-color: #121212;
+            color: #eee;
+            font-family: monospace;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 {
+            color: #4CAF50;
+        }
+        .device {
+            background-color: #1e1e1e;
+            border-left: 5px solid #4CAF50;
+            margin-bottom: 15px;
+            padding: 15px;
+            border-radius: 3px;
+            transition: all 0.3s ease;
+        }
+        .device:hover {
+            background-color: #252525;
+        }
+        .mac {
+            font-weight: bold;
+            color: #80CBC4;
+            font-size: 1.1em;
+        }
+        .company {
+            color: #4fc3f7;
+            font-weight: bold;
+        }
+        .rssi {
+            float: right;
+            font-weight: bold;
+            font-size: 1.1em;
+        }
+        .rssi-strong {
+            color: #4CAF50;
+        }
+        .rssi-medium {
+            color: #FFC107;
+        }
+        .rssi-weak {
+            color: #F44336;
+        }
+        .signal-bar {
+            height: 5px;
+            background: linear-gradient(to right, #F44336, #FFEB3B, #4CAF50);
+            margin-top: 10px;
+            position: relative;
+            border-radius: 2px;
+        }
+        .signal-indicator {
+            position: absolute;
+            width: 5px;
+            height: 15px;
+            background-color: white;
+            top: -5px;
+            transition: left 0.5s ease;
+        }
+        .info {
+            color: #9E9E9E;
+            font-size: 0.9em;
+            margin-top: 10px;
+        }
+        .control-panel {
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #1e1e1e;
+            border-radius: 5px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .stats {
+            padding: 5px 10px;
+            border-radius: 3px;
+            background-color: #333;
+            color: #4CAF50;
+        }
+        .btn {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 3px;
+            cursor: pointer;
+            margin-left: 10px;
+        }
+        .btn:hover {
+            background-color: #388E3C;
+        }
+        .search-container {
+            margin-top: 10px;
+        }
+        .search-input {
+            background-color: #333;
+            color: #fff;
+            border: 1px solid #555;
+            padding: 8px;
+            border-radius: 3px;
+            width: 300px;
+        }
+        .type-badge {
+            background-color: #2196F3;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.8em;
+            margin-left: 8px;
+        }
+        .apple-device {
+            border-left-color: #f9f9f9; /* Apple-ish white */
+        }
+        .filter-box {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .filter-box label {
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+        }
+        .filter-box input {
+            margin-right: 5px;
+        }
+        #raw-data {
+            max-height: 100px;
+            overflow-y: auto;
+            word-break: break-all;
+            font-size: 0.8em;
+            margin-top: 10px;
+            padding: 5px;
+            background-color: #333;
+            border-radius: 3px;
+            color: #aaa;
+        }
+    </style>
+</head>
+<body>
+    <h1>Ubertooth BLE Scanner</h1>
+    
+    <div class="control-panel">
+        <div>
+            <div class="stats" id="status">Scanning for devices...</div>
+            <div class="search-container">
+                <input type="text" class="search-input" id="search-input" placeholder="Search by MAC or company...">
+            </div>
+            <div class="filter-box">
+                <label>
+                    <input type="checkbox" id="show-raw" /> Show Raw Data
+                </label>
+                <label>
+                    <input type="checkbox" id="auto-update" checked /> Auto Update
+                </label>
+            </div>
+        </div>
+        <div>
+            <button class="btn" id="sort-rssi-btn">Sort by RSSI</button>
+            <button class="btn" id="sort-time-btn">Sort by Time</button>
+            <button class="btn" id="refresh-btn">Refresh Now</button>
+        </div>
+    </div>
+    
+    <div id="device-list">
+        <p>Scanning for BLE devices...</p>
+    </div>
+    
+    <script>
+        // DOM elements
+        const deviceList = document.getElementById('device-list');
+        const status = document.getElementById('status');
+        const refreshBtn = document.getElementById('refresh-btn');
+        const sortRssiBtn = document.getElementById('sort-rssi-btn');
+        const sortTimeBtn = document.getElementById('sort-time-btn');
+        const searchInput = document.getElementById('search-input');
+        const showRawCheckbox = document.getElementById('show-raw');
+        const autoUpdateCheckbox = document.getElementById('auto-update');
+        
+        // Global state
+        let allDevices = [];
+        let searchTerm = '';
+        let sortBy = 'rssi'; // Default sort by RSSI
+        let intervalId = null;
+        let showRaw = false;
+        
+        // Get RSSI class based on signal strength
+        function getRssiClass(rssi) {
+            rssi = parseInt(rssi);
+            if (rssi >= -70) return 'rssi-strong';
+            if (rssi >= -85) return 'rssi-medium';
+            return 'rssi-weak';
+        }
+        
+        // Filter devices based on search term
+        function filterDevices(devices) {
+            if (!searchTerm) return devices;
+            
+            return devices.filter(device => {
+                return device.mac.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                       (device.company && device.company.toLowerCase().includes(searchTerm.toLowerCase()));
+            });
+        }
+        
+        // Sort devices
+        function sortDevices(devices) {
+            if (sortBy === 'rssi') {
+                return devices.sort((a, b) => parseInt(b.rssi) - parseInt(a.rssi));
+            } else if (sortBy === 'time') {
+                return devices.sort((a, b) => {
+                    const timeA = new Date(a.last_seen);
+                    const timeB = new Date(b.last_seen);
+                    return timeB - timeA;
+                });
+            }
+            return devices;
+        }
+        
+        // Render devices to HTML
+        function renderDevices(devices) {
+            // No devices
+            if (devices.length === 0) {
+                deviceList.innerHTML = '<p>No devices found matching your criteria.</p>';
+                return;
+            }
+            
+            let html = '';
+            devices.forEach(device => {
+                // Calculate signal position (0-100%)
+                const rssiValue = parseInt(device.rssi);
+                // Scale from -100...-30 to 0...100%
+                const signalPercent = Math.min(100, Math.max(0, (rssiValue + 100) / 70 * 100));
+                
+                // Device company-based styling
+                const deviceClass = device.company && device.company.includes('Apple') ? 'device apple-device' : 'device';
+                
+                // Format company info
+                const company = device.company || 'Unknown Device';
+                
+                html += `
+                <div class="${deviceClass}">
+                    <div class="${getRssiClass(device.rssi)} rssi">${device.rssi} dBm</div>
+                    <div class="mac">${device.mac}</div>
+                    <div class="company">${company}</div>
+                    <div class="signal-bar">
+                        <div class="signal-indicator" style="left: ${signalPercent}%"></div>
+                    </div>
+                    <div class="info">
+                        First seen: ${device.first_seen}<br>
+                        Last seen: ${device.last_seen}<br>
+                        Packet count: ${device.count || 1}
+                    </div>
+                    ${showRaw ? `<div id="raw-data">${device.raw || ''}</div>` : ''}
+                </div>
+                `;
+            });
+            
+            deviceList.innerHTML = html;
+        }
+        
+        // Update from server
+        function updateDevices() {
+            fetch('/data')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! Status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(devices => {
+                    allDevices = devices;
+                    
+                    // Filter and sort
+                    const filtered = filterDevices(devices);
+                    const sorted = sortDevices(filtered);
+                    
+                    // Update status
+                    status.textContent = `Found ${devices.length} devices (showing ${filtered.length})`;
+                    
+                    // Render devices
+                    renderDevices(sorted);
+                })
+                .catch(error => {
+                    console.error('Error fetching data:', error);
+                    status.textContent = `Error: ${error.message}`;
+                });
+        }
+        
+        // Setup auto-update interval
+        function setupAutoUpdate() {
+            if (intervalId) {
+                clearInterval(intervalId);
+                intervalId = null;
+            }
+            
+            if (autoUpdateCheckbox.checked) {
+                intervalId = setInterval(updateDevices, 3000);
+            }
+        }
+        
+        // Event listeners
+        refreshBtn.addEventListener('click', updateDevices);
+        
+        sortRssiBtn.addEventListener('click', () => {
+            sortBy = 'rssi';
+            const sorted = sortDevices(filterDevices(allDevices));
+            renderDevices(sorted);
+        });
+        
+        sortTimeBtn.addEventListener('click', () => {
+            sortBy = 'time';
+            const sorted = sortDevices(filterDevices(allDevices));
+            renderDevices(sorted);
+        });
+        
+        searchInput.addEventListener('input', (e) => {
+            searchTerm = e.target.value.toLowerCase();
+            const filtered = filterDevices(allDevices);
+            const sorted = sortDevices(filtered);
+            status.textContent = `Found ${allDevices.length} devices (showing ${filtered.length})`;
+            renderDevices(sorted);
+        });
+        
+        showRawCheckbox.addEventListener('change', () => {
+            showRaw = showRawCheckbox.checked;
+            const filtered = filterDevices(allDevices);
+            const sorted = sortDevices(filtered);
+            renderDevices(sorted);
+        });
+        
+        autoUpdateCheckbox.addEventListener('change', setupAutoUpdate);
+        
+        // Initial setup
+        updateDevices();
+        setupAutoUpdate();
+    </script>
+</body>
+</html>
